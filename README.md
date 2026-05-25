@@ -34,21 +34,10 @@ DrowsiGuard exists to demonstrate how a normal mobile device can become a low-co
 
 ## Screenshots
 
-Add screenshots here after running the app:
-
 | Login | Home | Detection | Detection Yawning |
 | --- | --- | --- | --- |
-| [https://github.com/user-attachments/assets/4f16993e-c4ee-46c0-a4b1-e7173d4f0bdc](https://github.com/user-attachments/assets/4f16993e-c4ee-46c0-a4b1-e7173d4f0bdc) | [https://github.com/user-attachments/assets/ceec9297-a526-4a47-a118-b908cc6ec38c](https://github.com/user-attachments/assets/ceec9297-a526-4a47-a118-b908cc6ec38c) | [https://github.com/user-attachments/assets/86b98aca-e7e0-4703-b27a-a419f8496f6e](https://github.com/user-attachments/assets/86b98aca-e7e0-4703-b27a-a419f8496f6e) | [https://github.com/user-attachments/assets/ef347c6b-10d1-4249-b8c7-c6ce4eef0b41](https://github.com/user-attachments/assets/ef347c6b-10d1-4249-b8c7-c6ce4eef0b41) |
+| ![Login](https://github.com/user-attachments/assets/4f16993e-c4ee-46c0-a4b1-e7173d4f0bdc) | ![Home](https://github.com/user-attachments/assets/ceec9297-a526-4a47-a118-b908cc6ec38c) | ![Detection](https://github.com/user-attachments/assets/86b98aca-e7e0-4703-b27a-a419f8496f6e) | ![Detection Yawning](https://github.com/user-attachments/assets/ef347c6b-10d1-4249-b8c7-c6ce4eef0b41) |
 
-Suggested screenshot folder:
-
-```text
-screenshots/
-  login.png
-  home.png
-  detection.png
-  history.png
-```
 
 ## Tech Stack
 
