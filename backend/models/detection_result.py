@@ -63,6 +63,20 @@ class DetectionResult:
             Total number of normal blinks detected in this session.
             Blinks are eye closures shorter than BLINK_MAX_FRAMES.
 
+        mar (float):
+            Raw MAR (Mouth Aspect Ratio) value computed from mouth landmarks.
+            Typical range: 0.3 (closed) to 1.2+ (wide yawn).
+
+        smoothed_mar (float):
+            Moving-average smoothed MAR value used for decision making.
+
+        is_yawning (bool):
+            Whether the mouth has been open past MAR_THRESHOLD for
+            YAWN_MIN_FRAMES consecutive frames (a genuine yawn).
+
+        yawn_count (int):
+            Total number of confirmed yawns in this session.
+
         error (Optional[str]):
             Error message if something went wrong (e.g., no face).
             None when detection is working normally.
@@ -87,6 +101,12 @@ class DetectionResult:
 
     # --- Informational ---
     blink_count: int = 0
+
+    # --- Yawn / MAR ---
+    mar: float = 0.0
+    smoothed_mar: float = 0.0
+    is_yawning: bool = False
+    yawn_count: int = 0
 
     # --- Error handling ---
     error: Optional[str] = None
@@ -113,6 +133,10 @@ class DetectionResult:
                 "drowsiness_percentage": 60.0,
                 "status": "Warning",
                 "blink_count": 5,
+                "mar": 0.85,
+                "smoothed_mar": 0.82,
+                "is_yawning": true,
+                "yawn_count": 2,
                 "error": null
             }
         """
@@ -141,6 +165,10 @@ class DetectionResult:
             drowsiness_percentage=0.0,
             status="No Face Detected",
             blink_count=0,
+            mar=0.0,
+            smoothed_mar=0.0,
+            is_yawning=False,
+            yawn_count=0,
             error="no_face_detected",
         )
 
@@ -149,7 +177,9 @@ class DetectionResult:
         return (
             f"DetectionResult("
             f"ear={self.ear:.4f}, "
+            f"mar={self.mar:.4f}, "
             f"status='{self.status}', "
             f"drowsiness={self.drowsiness_percentage:.1f}%, "
-            f"blinks={self.blink_count})"
+            f"yawning={self.is_yawning}, "
+            f"blinks={self.blink_count}, yawns={self.yawn_count})"
         )

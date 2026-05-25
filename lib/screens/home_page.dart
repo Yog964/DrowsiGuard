@@ -1,30 +1,79 @@
 /// ============================================================
 /// HOME PAGE (Dashboard)
 /// ============================================================
-/// Main dashboard screen with a 2x3 grid of feature cards.
+/// Main dashboard screen with a 2x2 grid of feature cards.
 /// Acts as the central hub for navigating to all app features.
 ///
 /// Grid Options:
 ///   1. Start Detection  → DetectionScreen
-///   2. Drive History     → PlaceholderPage
-///   3. Live Alerts       → PlaceholderPage
-///   4. Profile           → ProfilePage
-///   5. Settings          → SettingsPage
-///   6. Help & Support    → PlaceholderPage
+///   2. Drive History     → DriveHistoryPage
+///   3. Profile           → ProfilePage
+///   4. Settings          → SettingsPage
 /// ============================================================
 
 import 'package:flutter/material.dart';
 import '../widgets/home_option_card.dart';
+import '../services/websocket_service.dart';
+import '../services/app_settings.dart';
 import 'detection_screen.dart';
 import 'profile_page.dart';
 import 'settings_page.dart';
-import 'placeholder_page.dart';
+import 'drive_history_page.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final WebSocketService _wsService = WebSocketService();
+  final AppSettings _settings = AppSettings();
+  ConnectionStatus _status = ConnectionStatus.disconnected;
+
+  @override
+  void initState() {
+    super.initState();
+    _status = _wsService.status;
+
+    // Auto-start detection if enabled
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_settings.autoStart) {
+        _navigateToDetection();
+      }
+    });
+  }
+
+  void _navigateToDetection() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const DetectionScreen(),
+      ),
+    );
+    // Refresh status when returning
+    if (mounted) setState(() {});
+  }
+
+  void _refreshStatus() {
+    if (mounted) {
+      setState(() {
+        _status = _wsService.status;
+      });
+    }
+  }
+
+
+  @override
   Widget build(BuildContext context) {
+    // Refresh status from service
+    _status = _wsService.status;
+    final bool isReady = _status == ConnectionStatus.connected;
+
+    // Get current user name
+    final userName = _settings.currentUser?.name ?? 'User';
+
     return Scaffold(
       // ---- App Background ----
       backgroundColor: const Color(0xFFF4F6F9),
@@ -70,41 +119,15 @@ class HomePage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            const Text(
-              'Rahul Sharma 👋',
-              style: TextStyle(
+            Text(
+              '$userName 👋',
+              style: const TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFF2D3436),
               ),
             ),
             const SizedBox(height: 8),
-
-            // ---- Status Indicator ----
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.green.withOpacity(0.3)),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.circle, size: 10, color: Colors.green),
-                  SizedBox(width: 6),
-                  Text(
-                    'System Ready',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 28),
 
             // ---- Dashboard Title ----
             const Text(
@@ -130,12 +153,16 @@ class HomePage extends StatelessWidget {
                     icon: Icons.camera_alt_rounded,
                     title: 'Start\nDetection',
                     color: const Color(0xFF6C5CE7),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const DetectionScreen(),
-                      ),
-                    ),
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const DetectionScreen(),
+                        ),
+                      );
+                      // Refresh status when returning
+                      if (mounted) setState(() {});
+                    },
                   ),
 
                   // Card 2: Drive History
@@ -146,29 +173,12 @@ class HomePage extends StatelessWidget {
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const PlaceholderPage(
-                          title: 'Drive History',
-                        ),
+                        builder: (_) => const DriveHistoryPage(),
                       ),
                     ),
                   ),
 
-                  // Card 3: Live Alerts
-                  HomeOptionCard(
-                    icon: Icons.warning_amber_rounded,
-                    title: 'Live\nAlerts',
-                    color: const Color(0xFFFD79A8),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const PlaceholderPage(
-                          title: 'Live Alerts',
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Card 4: Profile
+                  // Card 3: Profile
                   HomeOptionCard(
                     icon: Icons.person_rounded,
                     title: 'My\nProfile',
@@ -181,7 +191,7 @@ class HomePage extends StatelessWidget {
                     ),
                   ),
 
-                  // Card 5: Settings
+                  // Card 4: Settings
                   HomeOptionCard(
                     icon: Icons.settings_rounded,
                     title: 'App\nSettings',
@@ -190,21 +200,6 @@ class HomePage extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const SettingsPage(),
-                      ),
-                    ),
-                  ),
-
-                  // Card 6: Help & Support
-                  HomeOptionCard(
-                    icon: Icons.help_outline_rounded,
-                    title: 'Help &\nSupport',
-                    color: const Color(0xFFA29BFE),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const PlaceholderPage(
-                          title: 'Help & Support',
-                        ),
                       ),
                     ),
                   ),

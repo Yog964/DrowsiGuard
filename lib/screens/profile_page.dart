@@ -1,21 +1,17 @@
 /// ============================================================
 /// PROFILE PAGE
 /// ============================================================
-/// Displays the user's profile information including name,
-/// email, phone, vehicle number, and emergency contact.
-///
+/// Displays the user's profile information fetched from MongoDB.
 /// Features:
-///   - Displays user info from UserModel (mock data)
+///   - Displays user info from AppSettings (loaded on login)
 ///   - Navigate to EditProfilePage to update info
 ///   - Logout functionality
-///
-/// Future Scope:
-///   - Fetch profile from MongoDB
-///   - Display profile picture from cloud storage
 /// ============================================================
 
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
+import '../services/app_settings.dart';
+import '../services/api_service.dart';
 import 'edit_profile_page.dart';
 import 'login_page.dart';
 
@@ -27,13 +23,42 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  // Load mock user data (replace with API call in future)
+  final AppSettings _settings = AppSettings();
+  final ApiService _api = ApiService();
+
   late UserModel _user;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _user = UserModel.getMockUser();
+    _loadProfile();
+  }
+
+  /// Load profile from settings or fetch from API
+  void _loadProfile() async {
+    if (_settings.currentUser != null) {
+      setState(() {
+        _user = _settings.currentUser!;
+        _isLoading = false;
+      });
+
+      // Also try to refresh from the backend
+      try {
+        final freshUser = await _api.getProfile(_user.id);
+        _settings.currentUser = freshUser;
+        if (mounted) {
+          setState(() => _user = freshUser);
+        }
+      } catch (_) {
+        // Use cached data if API fails
+      }
+    } else {
+      setState(() {
+        _user = UserModel.getMockUser();
+        _isLoading = false;
+      });
+    }
   }
 
   /// Navigates to edit profile and updates local state on return.
@@ -49,6 +74,7 @@ class _ProfilePageState extends State<ProfilePage> {
     if (updatedUser != null) {
       setState(() {
         _user = updatedUser;
+        _settings.currentUser = updatedUser;
       });
     }
   }
@@ -69,6 +95,8 @@ class _ProfilePageState extends State<ProfilePage> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx); // Close dialog
+              // Clear user data
+              _settings.logout();
               // Navigate to login and remove all previous routes
               Navigator.pushAndRemoveUntil(
                 context,
@@ -92,6 +120,22 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF4F6F9),
+        appBar: AppBar(
+          title: const Text('My Profile'),
+          centerTitle: true,
+          backgroundColor: const Color(0xFF0F2027),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        body: const Center(
+          child: CircularProgressIndicator(color: Color(0xFF00BFA6)),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F9),
       appBar: AppBar(
@@ -165,7 +209,7 @@ class _ProfilePageState extends State<ProfilePage> {
             _buildInfoTile(
               icon: Icons.phone_outlined,
               title: 'Phone',
-              value: _user.phone,
+              value: _user.phone.isEmpty ? 'Not set' : _user.phone,
               color: const Color(0xFF00B894),
             ),
             _buildInfoTile(
@@ -302,6 +346,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   /// Extracts initials from a full name (e.g., "Rahul Sharma" → "RS").
   String _getInitials(String name) {
+    if (name.isEmpty) return '?';
     final parts = name.trim().split(' ');
     if (parts.length >= 2) {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();

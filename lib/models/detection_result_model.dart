@@ -18,6 +18,10 @@
 ///   "drowsiness_percentage": 60.0,
 ///   "status": "Warning",
 ///   "blink_count": 5,
+///   "mar": 0.85,
+///   "smoothed_mar": 0.82,
+///   "is_yawning": true,
+///   "yawn_count": 2,
 ///   "error": null
 /// }
 ///
@@ -83,6 +87,22 @@ class DetectionResultModel {
   /// Blinks are eye closures shorter than BLINK_MAX_FRAMES.
   final int blinkCount;
 
+  // ── Yawn / MAR ──
+
+  /// Raw MAR (Mouth Aspect Ratio) from mouth landmark computation.
+  /// Typical range: 0.3 (closed) to 1.2+ (wide yawn).
+  final double mar;
+
+  /// Moving-average smoothed MAR used for decision making.
+  final double smoothedMar;
+
+  /// Whether a confirmed yawn is currently active (mouth open
+  /// for >= YAWN_MIN_FRAMES consecutive frames).
+  final bool isYawning;
+
+  /// Total number of confirmed yawns in this session.
+  final int yawnCount;
+
   /// Error message from backend (null when everything is fine).
   /// Possible values: "no_face_detected", "server_error", etc.
   final String? error;
@@ -99,6 +119,10 @@ class DetectionResultModel {
     required this.drowsinessPercentage,
     required this.status,
     required this.blinkCount,
+    this.mar = 0.0,
+    this.smoothedMar = 0.0,
+    this.isYawning = false,
+    this.yawnCount = 0,
     this.error,
   });
 
@@ -122,6 +146,10 @@ class DetectionResultModel {
           (json['drowsiness_percentage'] as num?)?.toDouble() ?? 0.0,
       status: json['status'] as String? ?? 'Unknown',
       blinkCount: json['blink_count'] as int? ?? 0,
+      mar: (json['mar'] as num?)?.toDouble() ?? 0.0,
+      smoothedMar: (json['smoothed_mar'] as num?)?.toDouble() ?? 0.0,
+      isYawning: json['is_yawning'] as bool? ?? false,
+      yawnCount: json['yawn_count'] as int? ?? 0,
       error: json['error'] as String?,
     );
   }
@@ -139,6 +167,10 @@ class DetectionResultModel {
       'drowsiness_percentage': drowsinessPercentage,
       'status': status,
       'blink_count': blinkCount,
+      'mar': mar,
+      'smoothed_mar': smoothedMar,
+      'is_yawning': isYawning,
+      'yawn_count': yawnCount,
       'error': error,
     };
   }
@@ -157,6 +189,10 @@ class DetectionResultModel {
       drowsinessPercentage: 0.0,
       status: 'Waiting...',
       blinkCount: 0,
+      mar: 0.0,
+      smoothedMar: 0.0,
+      isYawning: false,
+      yawnCount: 0,
       error: null,
     );
   }
@@ -175,6 +211,10 @@ class DetectionResultModel {
       drowsinessPercentage: 0.0,
       status: 'No Face Detected',
       blinkCount: 0,
+      mar: 0.0,
+      smoothedMar: 0.0,
+      isYawning: false,
+      yawnCount: 0,
       error: 'no_face_detected',
     );
   }
@@ -227,14 +267,16 @@ class DetectionResultModel {
   }
 
   /// Returns the drowsiness percentage formatted as a display string.
-  ///
-  /// Example: "45.2%"
   String get drowsinessDisplay => '${drowsinessPercentage.toStringAsFixed(1)}%';
 
-  /// Returns the EAR formatted as a display string.
-  ///
-  /// Example: "0.2847"
+  /// Returns the EAR formatted as a display string. Example: "0.2847"
   String get earDisplay => ear.toStringAsFixed(4);
+
+  /// Returns the MAR formatted as a display string. Example: "0.8312"
+  String get marDisplay => mar.toStringAsFixed(4);
+
+  /// Returns "YAWNING" or "NORMAL" for the yawn badge in the UI.
+  String get yawnDisplay => isYawning ? 'YAWNING' : 'NORMAL';
 
   @override
   String toString() {

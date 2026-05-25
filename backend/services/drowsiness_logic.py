@@ -12,10 +12,14 @@
 #   4. Blink Filtering    — Separates normal blinks from drowsiness
 #   5. Drowsiness %       — Sliding window percentage calculation
 #   6. Status Classification — Maps percentage to Awake/Warning/Drowsy
+#   7. MAR Calculation    — Computes Mouth Aspect Ratio from landmarks
+#   8. Yawn Detection     — Tracks sustained mouth-open events
 #
 # Architecture:
 #   EARCalculator    → Pure math, stateless, reusable
 #   EyeStateTracker  → Per-frame state machine with blink filtering
+#   MARCalculator    → Pure math, stateless, reusable  (NEW)
+#   YawnTracker      → Per-frame yawn state machine    (NEW)
 #   DrowsinessLogic  → High-level orchestrator combining everything
 #
 # ==============================================================
@@ -41,6 +45,10 @@ from config.constants import (
     WARNING_MAX_PERCENT,
     LEFT_EYE_INDICES,
     RIGHT_EYE_INDICES,
+    MAR_THRESHOLD,
+    MAR_SMOOTHING_WINDOW,
+    YAWN_MIN_FRAMES,
+    MOUTH_INDICES,
 )
 from models.detection_result import DetectionResult
 
@@ -316,7 +324,7 @@ class EyeStateTracker:
                 if (
                     self._current_state == self.STATE_CLOSING
                     and self._consecutive_closed <= BLINK_MAX_FRAMES
-                    and self._consecutive_closed >= 2  # At least 2 frames
+                    and self._consecutive_closed >= 1  # At least 1 frame (at 5 FPS, a blink is often just 1 frame)
                 ):
                     # Yes, it was a blink! Count it but DON'T flag as drowsy
                     self._blink_count += 1
@@ -347,132 +355,260 @@ class EyeStateTracker:
 
 
 # ═══════════════════════════════════════════════════════════════
-# SECTION 3: DROWSINESS LOGIC (Main Orchestrator)
+# SECTION 3: MAR CALCULATOR (Stateless Math)
 # ═══════════════════════════════════════════════════════════════
-# Top-level class that combines EAR calculation, smoothing, state
-# tracking, and percentage calculation into a single API.
+# The Mouth Aspect Ratio (MAR) measures how open the mouth is.
+# It uses 8 landmarks around the lips (from MediaPipe's 468-pt mesh).
+#
+# Formula:
+#   MAR = (||p3-p4|| + ||p5-p6|| + ||p7-p8||) / (2 * ||p1-p2||)
+#
+# Where p1,p2 are horizontal corners and the rest are vertical pairs.
+#
+# Mouth closed / talking:  MAR ≈ 0.3 – 0.6
+# Yawning (wide open):     MAR ≈ 0.7 – 1.2
+# ═══════════════════════════════════════════════════════════════
+
+class MARCalculator:
+    """
+    Computes the Mouth Aspect Ratio (MAR) from MediaPipe face mesh
+    landmarks. Stateless — pure mathematical computation.
+
+    Uses 8 landmark points around the mouth:
+      - 2 horizontal (corners of mouth)
+      - 6 vertical (3 pairs from upper to lower lip)
+
+    Usage:
+        calc = MARCalculator()
+        mar = calc.calculate_mar(landmarks)
+    """
+
+    def __init__(self):
+        self.mouth_indices = MOUTH_INDICES  # [left, right, u1, l1, u2, l2, u3, l3]
+
+    @staticmethod
+    def _landmark_to_array(landmark: dict) -> np.ndarray:
+        return np.array(
+            [landmark["x"], landmark["y"], landmark["z"]],
+            dtype=np.float64,
+        )
+
+    @staticmethod
+    def _euclidean_distance(p1: np.ndarray, p2: np.ndarray) -> float:
+        return float(np.linalg.norm(p1 - p2))
+
+    def calculate_mar(self, landmarks: list) -> float:
+        """
+        Calculate the Mouth Aspect Ratio from 8 mouth landmarks.
+
+        Indices layout (from MOUTH_INDICES in constants.py):
+            [0] left_corner   [1] right_corner  ← horizontal pair
+            [2] upper_mid     [3] lower_mid      ← vertical pair 1
+            [4] upper_left    [5] lower_left     ← vertical pair 2
+            [6] upper_right   [7] lower_right    ← vertical pair 3
+
+        Args:
+            landmarks: Full list of 468 MediaPipe face landmarks (dicts).
+
+        Returns:
+            float: MAR value (0.0 if horizontal distance is zero).
+        """
+        pts = [self._landmark_to_array(landmarks[i]) for i in self.mouth_indices]
+
+        horizontal = self._euclidean_distance(pts[0], pts[1])
+        if horizontal < 1e-6:
+            return 0.0
+
+        vert1 = self._euclidean_distance(pts[2], pts[3])
+        vert2 = self._euclidean_distance(pts[4], pts[5])
+        vert3 = self._euclidean_distance(pts[6], pts[7])
+
+        mar = (vert1 + vert2 + vert3) / (2.0 * horizontal)
+        return mar
+
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 4: YAWN TRACKER (Stateful State Machine)
+# ═══════════════════════════════════════════════════════════════
+# Tracks whether the driver is yawning by checking how many
+# consecutive frames the MAR stays above MAR_THRESHOLD.
+#
+# States:
+#   CLOSED  → mouth is at rest (normal)
+#   OPENING → just exceeded threshold (might be speech)
+#   YAWNING → sustained open mouth = confirmed yawn
+# ═══════════════════════════════════════════════════════════════
+
+class YawnTracker:
+    """
+    Stateful tracker that distinguishes genuine yawns from short
+    mouth openings (speech, coughing, laughing).
+
+    A yawn is only confirmed when the MAR exceeds MAR_THRESHOLD
+    for at least YAWN_MIN_FRAMES consecutive frames.
+
+    Usage:
+        tracker = YawnTracker()
+        result = tracker.update(smoothed_mar=0.85)
+        # {'is_yawning': True, 'yawn_count': 1, 'open_frames': 4}
+    """
+
+    def __init__(self):
+        self._consecutive_open: int = 0   # frames above threshold
+        self._consecutive_closed: int = 0  # frames below threshold
+        self._yawn_active: bool = False    # currently in a yawn
+        self._yawn_count: int = 0         # total confirmed yawns
+
+    def update(self, smoothed_mar: float) -> dict:
+        """
+        Process one frame's smoothed MAR value.
+
+        Args:
+            smoothed_mar: Noise-filtered MAR value.
+
+        Returns:
+            dict with keys:
+                'is_yawning' (bool): True during a confirmed yawn.
+                'yawn_count' (int): Total yawns so far.
+                'open_frames' (int): Consecutive frames mouth was open.
+        """
+        mouth_open = smoothed_mar > MAR_THRESHOLD
+
+        if mouth_open:
+            self._consecutive_open += 1
+            self._consecutive_closed = 0
+
+            if self._consecutive_open >= YAWN_MIN_FRAMES:
+                # Confirm yawn on the exact frame it crosses the threshold
+                if not self._yawn_active:
+                    self._yawn_count += 1
+                    self._yawn_active = True
+        else:
+            self._consecutive_closed += 1
+            # Require 2 closed frames before resetting (debounce)
+            if self._consecutive_closed >= 2:
+                self._consecutive_open = 0
+                self._yawn_active = False
+
+        return {
+            "is_yawning": self._yawn_active,
+            "yawn_count": self._yawn_count,
+            "open_frames": self._consecutive_open,
+        }
+
+    def reset(self):
+        """Reset for a new session."""
+        self._consecutive_open = 0
+        self._consecutive_closed = 0
+        self._yawn_active = False
+        self._yawn_count = 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# SECTION 5: DROWSINESS LOGIC (Main Orchestrator)
+# ═══════════════════════════════════════════════════════════════
+# Top-level class combining EAR + MAR for maximum accuracy.
 #
 # Usage:
 #   logic = DrowsinessLogic()
-#   result = logic.process_ear(raw_ear_value)
-#   # or
 #   result = logic.process_landmarks(face_landmarks)
 # ═══════════════════════════════════════════════════════════════
 
 class DrowsinessLogic:
     """
-    Main drowsiness detection engine.
+    Main drowsiness detection engine — EAR + MAR combined.
 
     This class orchestrates:
       1. EAR computation from face landmarks
       2. EAR smoothing via moving average
       3. Eye state tracking with blink filtering
       4. Drowsiness percentage over a sliding window
-      5. Human-readable status classification
+      5. MAR computation from mouth landmarks          (NEW)
+      6. MAR smoothing via moving average               (NEW)
+      7. Yawn detection with sustain + debounce filter  (NEW)
+      8. Combined EAR + Yawn status classification      (NEW)
 
     Create ONE instance per driver session / WebSocket connection.
 
     Integration guide:
-        # In your WebSocket handler:
         logic = DrowsinessLogic()
-
-        # Option A: If you have face landmarks from MediaPipe
+        # Pass full face landmarks (EAR + MAR computed internally)
         result = logic.process_landmarks(landmark_list)
-
-        # Option B: If you already computed the EAR value
-        result = logic.process_ear(raw_ear_value)
-
-        # Send result to Flutter
         await websocket.send_json(result.to_dict())
     """
 
     def __init__(self):
         """Initialize all sub-components for a new session."""
 
-        # EAR calculator (stateless, computes EAR from landmarks)
+        # ── EAR components ──
         self._ear_calculator = EARCalculator()
-
-        # EAR smoothing buffer (moving average window)
-        # Stores the last N raw EAR values for noise reduction
         self._ear_buffer: deque = deque(maxlen=EAR_SMOOTHING_WINDOW)
-
-        # Eye state tracker (stateful, handles blink filtering)
         self._state_tracker = EyeStateTracker()
-
-        # Sliding window for drowsiness percentage calculation
-        # Each entry is True (drowsy frame) or False (not drowsy)
         self._drowsy_window: deque = deque(maxlen=SLIDING_WINDOW_SIZE)
+
+        # ── MAR / Yawn components ──
+        self._mar_calculator = MARCalculator()
+        self._mar_buffer: deque = deque(maxlen=MAR_SMOOTHING_WINDOW)
+        self._yawn_tracker = YawnTracker()
 
     # ── Public API ─────────────────────────────────────────────
 
     def process_landmarks(self, landmarks: list) -> DetectionResult:
         """
-        Full pipeline: landmarks → EAR → smoothing → detection → result.
+        Full pipeline: landmarks → EAR + MAR → detection → result.
 
-        This is the primary method to call when you have raw face
-        landmarks from MediaPipe's FaceLandmarker.
+        This is the primary entry point. It computes both EAR and MAR
+        from the same MediaPipe landmark list, then passes them through
+        their respective pipelines before building a combined result.
 
         Args:
-            landmarks (list): List of 468 landmark dicts from MediaPipe
-                              Each dict has {'x': float, 'y': float, 'z': float}
+            landmarks: List of 468 landmark dicts from MediaPipe.
+                       Each dict has {'x': float, 'y': float, 'z': float}
 
         Returns:
-            DetectionResult: Complete detection output for this frame.
-
-        Example:
-            >>> logic = DrowsinessLogic()
-            >>> result = logic.process_landmarks(face_landmarks)
-            >>> print(result.status)       # "Awake"
-            >>> print(result.to_dict())    # JSON-ready dict
+            DetectionResult with EAR, MAR, yawn, and drowsiness data.
         """
-        # Step 1: Compute raw EAR from landmarks
+        # Compute raw EAR and MAR from landmarks
         raw_ear = self._ear_calculator.calculate_ear(landmarks)
+        raw_mar = self._mar_calculator.calculate_mar(landmarks)
 
-        # Step 2: Pass to the EAR processing pipeline
-        return self.process_ear(raw_ear)
+        return self._process(raw_ear, raw_mar)
 
     def process_ear(self, raw_ear: float) -> DetectionResult:
+        """Process a raw EAR value with MAR=0 (no yawn data). For testing only."""
+        return self._process(raw_ear, raw_mar=0.0)
+
+    def _process(self, raw_ear: float, raw_mar: float) -> DetectionResult:
         """
-        Process a single raw EAR value through the full detection pipeline.
+        Core pipeline: (raw_ear, raw_mar) → full DetectionResult.
 
-        Use this if you've already computed the EAR yourself, or if
-        you're testing with synthetic EAR values.
-
-        Pipeline:
+        EAR Pipeline:
           raw_ear → smooth → state machine → sliding window → classify
 
-        Args:
-            raw_ear (float): Raw EAR value (unsmoothed)
+        MAR Pipeline:
+          raw_mar → smooth → yawn tracker → inject into classification
 
-        Returns:
-            DetectionResult: Complete detection output for this frame.
-
-        Example:
-            >>> logic = DrowsinessLogic()
-            >>> result = logic.process_ear(0.18)  # Low EAR = eyes closing
-            >>> print(result.eye_closed)  # True
+        Combined classification:
+          - Eye state machine overrides to "Drowsy" on sustained closure.
+          - Active yawn overrides to "Warning" (escalates to "Drowsy" if
+            drowsiness_pct also exceeds WARNING_MAX_PERCENT).
         """
-        # ── Step 1: Smooth the EAR ──
+        # ── EAR pipeline ──
         smoothed_ear = self._smooth_ear(raw_ear)
-
-        # ── Step 2: Determine if eyes are closed ──
         eye_closed = smoothed_ear < EAR_THRESHOLD
-
-        # ── Step 3: Run through state machine ──
         state_result = self._state_tracker.update(smoothed_ear)
-
-        # ── Step 4: Update sliding window ──
         self._drowsy_window.append(state_result["is_drowsy"])
-
-        # ── Step 5: Calculate drowsiness percentage ──
         drowsiness_pct = self._calculate_drowsiness_percentage()
 
-        # ── Step 6: Classify driver status ──
+        # ── MAR / Yawn pipeline ──
+        smoothed_mar = self._smooth_mar(raw_mar)
+        yawn_result = self._yawn_tracker.update(smoothed_mar)
+
+        # ── Combined classification ──
         status = self._classify_status(
-            drowsiness_pct, state_result["state"]
+            drowsiness_pct, state_result["state"], yawn_result["is_yawning"]
         )
 
-        # ── Step 7: Build and return the result ──
         return DetectionResult(
             ear=round(raw_ear, 4),
             smoothed_ear=round(smoothed_ear, 4),
@@ -484,6 +620,10 @@ class DrowsinessLogic:
             drowsiness_percentage=round(drowsiness_pct, 1),
             status=status,
             blink_count=state_result["blink_count"],
+            mar=round(raw_mar, 4),
+            smoothed_mar=round(smoothed_mar, 4),
+            is_yawning=yawn_result["is_yawning"],
+            yawn_count=yawn_result["yawn_count"],
             error=None,
         )
 
@@ -491,42 +631,26 @@ class DrowsinessLogic:
         """
         Reset all detection state for a new session.
 
-        Call this when:
-          - A new WebSocket connection is established
-          - The user restarts the detection session
-          - You want to clear all historical data
+        Call this when a new WebSocket connection is established
+        or the user restarts detection.
         """
         self._ear_buffer.clear()
         self._state_tracker.reset()
         self._drowsy_window.clear()
+        self._mar_buffer.clear()
+        self._yawn_tracker.reset()
 
     # ── Private Helper Methods ─────────────────────────────────
 
     def _smooth_ear(self, raw_ear: float) -> float:
-        """
-        Apply moving average smoothing to the raw EAR value.
-
-        Why smooth?
-          - MediaPipe landmarks can jitter frame-to-frame
-          - Camera noise causes small EAR fluctuations
-          - Smoothing prevents false positives from noise spikes
-
-        The smoothing window size is configured in constants.py
-        (default: 5 frames for a good balance of responsiveness
-         and stability).
-
-        Args:
-            raw_ear (float): Unsmoothed EAR value from this frame
-
-        Returns:
-            float: Moving average of recent EAR values
-        """
-        # Add current EAR to the buffer
+        """Apply moving average smoothing to raw EAR."""
         self._ear_buffer.append(raw_ear)
+        return sum(self._ear_buffer) / len(self._ear_buffer)
 
-        # Calculate the average of all values in the buffer
-        smoothed = sum(self._ear_buffer) / len(self._ear_buffer)
-        return smoothed
+    def _smooth_mar(self, raw_mar: float) -> float:
+        """Apply moving average smoothing to raw MAR."""
+        self._mar_buffer.append(raw_mar)
+        return sum(self._mar_buffer) / len(self._mar_buffer)
 
     def _calculate_drowsiness_percentage(self) -> float:
         """
@@ -556,39 +680,30 @@ class DrowsinessLogic:
         return percentage
 
     @staticmethod
-    def _classify_status(drowsiness_pct: float, eye_state: str) -> str:
+    def _classify_status(
+        drowsiness_pct: float,
+        eye_state: str,
+        is_yawning: bool = False,
+    ) -> str:
         """
-        Map the drowsiness percentage to a human-readable status label.
+        Map EAR + yawn data to a human-readable status label.
 
-        Classification rules (configurable via constants.py):
-          - 0% to 30%   → "Awake"    (driver is alert, green indicator)
-          - 31% to 60%  → "Warning"  (driver is getting drowsy, yellow)
-          - 61% to 100% → "Drowsy"   (driver needs immediate alert, red)
-
-        Special case:
-          - If eye_state is "Drowsy" from the state machine, we always
-            return "Drowsy" regardless of percentage. This ensures
-            instant response when sustained closure is detected.
-
-        Args:
-            drowsiness_pct (float): Current drowsiness percentage
-            eye_state (str): Current state from the state machine
-
-        Returns:
-            str: One of "Awake", "Warning", "Drowsy"
-
-        Note:
-            This status string is displayed directly in the Flutter UI.
-            Use it to control the color of the status indicator:
-              "Awake"   → Green
-              "Warning" → Yellow/Orange
-              "Drowsy"  → Red + trigger alarm
+        Priority order (highest to lowest):
+          1. Eye state machine says "Drowsy"  → always "Drowsy"
+          2. Active yawn + high drowsiness %  → "Drowsy"
+          3. Active yawn                      → at least "Warning"
+          4. Percentage thresholds            → Awake / Warning / Drowsy
         """
-        # If the state machine says drowsy, override everything
+        # Highest priority: state machine confirmed sustained eye closure
         if eye_state == EyeStateTracker.STATE_DROWSY:
             return "Drowsy"
 
-        # Otherwise, classify based on percentage thresholds
+        # Yawn detected: only bump to Warning, never Drowsy.
+        # Yawning is a secondary signal — only EAR drives Drowsy status.
+        if is_yawning:
+            return "Warning"
+
+        # Fall back to percentage-only classification
         if drowsiness_pct <= AWAKE_MAX_PERCENT:
             return "Awake"
         elif drowsiness_pct <= WARNING_MAX_PERCENT:

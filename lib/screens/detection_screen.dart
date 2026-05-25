@@ -23,6 +23,7 @@ import '../services/camera_service.dart';
 import '../services/websocket_service.dart';
 import '../services/alert_service.dart';
 import '../services/app_settings.dart';
+import '../services/api_service.dart';
 import '../models/detection_result_model.dart';
 
 class DetectionScreen extends StatefulWidget {
@@ -39,6 +40,13 @@ class _DetectionScreenState extends State<DetectionScreen>
   final WebSocketService _wsService = WebSocketService();
   final AlertService _alertService = AlertService();
   final AppSettings _settings = AppSettings();
+  final ApiService _api = ApiService();
+
+  // ── Session Tracking ──
+  DateTime? _sessionStartTime;
+  double _maxDrowsinessPercentage = 0.0;
+  int _drowsyEventCount = 0;
+  bool _wasDrowsy = false;
 
   // ── Animation Controllers ──
   late AnimationController _alertController;
@@ -51,11 +59,8 @@ class _DetectionScreenState extends State<DetectionScreen>
   bool _isCameraReady = false;
   String _errorMessage = '';
 
-  // ── Backend Server URL ──
-  final TextEditingController _serverIpController = TextEditingController(
-    text: '192.168.1.5',
-  );
-  final int _serverPort = 8000;
+  // ---- Backend Server URL ──
+  late final int _serverPort;
 
   @override
   void initState() {
@@ -72,6 +77,8 @@ class _DetectionScreenState extends State<DetectionScreen>
       CurvedAnimation(parent: _alertController, curve: Curves.easeInOut),
     );
 
+    _serverPort = _settings.serverPort;
+
     _initializeCamera();
   }
 
@@ -81,8 +88,11 @@ class _DetectionScreenState extends State<DetectionScreen>
     _stopMonitoring();
     _alertController.dispose();
     _cameraService.dispose();
+    
+    // CRITICAL: Clear the global singleton callback to prevent
+    // calling setState on a defunct element when status changes.
+    _wsService.clearStatusCallback();
     _wsService.disconnect();
-    _serverIpController.dispose();
     super.dispose();
   }
 
@@ -103,6 +113,11 @@ class _DetectionScreenState extends State<DetectionScreen>
           _isCameraReady = true;
           _errorMessage = '';
         });
+
+        // Auto-start monitoring if enabled in settings
+        if (_settings.autoStart) {
+          _startMonitoring();
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -113,21 +128,28 @@ class _DetectionScreenState extends State<DetectionScreen>
     }
   }
 
+
   /// Start monitoring: connect WebSocket + stream frames
   void _startMonitoring() {
     if (!_isCameraReady) return;
 
     final serverUrl =
-        'ws://${_serverIpController.text.trim()}:$_serverPort/ws';
+        'ws://${_settings.serverIp}:$_serverPort/ws';
 
     setState(() {
       _isMonitoring = true;
       _errorMessage = '';
+      _sessionStartTime = DateTime.now();
+      _maxDrowsinessPercentage = 0.0;
+      _drowsyEventCount = 0;
+      _wasDrowsy = false;
     });
 
     // Sync settings to alert service
     _alertService.soundEnabled = _settings.soundAlerts;
     _alertService.vibrationEnabled = _settings.vibrationAlerts;
+
+
 
     // Connect to the backend WebSocket
     _wsService.connect(
@@ -138,6 +160,14 @@ class _DetectionScreenState extends State<DetectionScreen>
           setState(() {
             _result = result;
             _handleAlertLogic(result);
+            // Track session stats
+            if (result.drowsinessPercentage > _maxDrowsinessPercentage) {
+              _maxDrowsinessPercentage = result.drowsinessPercentage;
+            }
+            if (result.isDrowsy && !_wasDrowsy) {
+              _drowsyEventCount++;
+            }
+            _wasDrowsy = result.isDrowsy;
           });
         }
       },
@@ -166,11 +196,30 @@ class _DetectionScreenState extends State<DetectionScreen>
     }
   }
 
-  /// Stop monitoring: stop frame stream + disconnect WebSocket
+  /// Stop monitoring: stop frame stream + disconnect WebSocket + save session
   void _stopMonitoring() {
     _cameraService.stopFrameStream();
     _wsService.disconnect();
     _alertService.stopAlert();
+
+    // Save session to MongoDB if we have a user and valid session
+    if (_sessionStartTime != null && _settings.currentUser != null) {
+      final endTime = DateTime.now();
+      final duration = endTime.difference(_sessionStartTime!).inSeconds;
+      if (duration > 2) {
+        _api.saveSession(
+          userId: _settings.currentUser!.id,
+          startTime: _sessionStartTime!.toIso8601String(),
+          endTime: endTime.toIso8601String(),
+          durationSeconds: duration,
+          maxDrowsinessPercentage: _maxDrowsinessPercentage,
+          totalBlinks: _result.blinkCount,
+          drowsyEvents: _drowsyEventCount,
+          status: 'completed',
+        );
+      }
+    }
+
     if (mounted) {
       setState(() => _isMonitoring = false);
     }
@@ -242,13 +291,15 @@ class _DetectionScreenState extends State<DetectionScreen>
                   padding: const EdgeInsets.all(20),
                   child: Column(
                     children: [
+                      // Control buttons (Moved to top)
+                      _buildControlButtons(),
+                      const SizedBox(height: 20),
+
                       // Connection status bar
                       _buildConnectionBar(),
                       const SizedBox(height: 16),
 
-                      // Server IP input
-                      _buildServerInput(),
-                      const SizedBox(height: 16),
+
 
                       // Status display (large)
                       _buildStatusCard(),
@@ -256,10 +307,6 @@ class _DetectionScreenState extends State<DetectionScreen>
 
                       // Metrics grid (EAR, %, Blinks, Frames)
                       _buildMetricsGrid(),
-                      const SizedBox(height: 20),
-
-                      // Control buttons
-                      _buildControlButtons(),
                       const SizedBox(height: 12),
 
                       // Error message display
@@ -496,63 +543,6 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 
-  /// Server IP input field
-  Widget _buildServerInput() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.wifi, color: Color(0xFF636E72), size: 22),
-          const SizedBox(width: 10),
-          const Text(
-            'ws://',
-            style: TextStyle(
-              color: Color(0xFF636E72),
-              fontFamily: 'monospace',
-              fontSize: 14,
-            ),
-          ),
-          Expanded(
-            child: TextField(
-              controller: _serverIpController,
-              enabled: !_isMonitoring,
-              decoration: const InputDecoration(
-                hintText: 'Server IP Address',
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(vertical: 4),
-              ),
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Text(
-            ':$_serverPort/ws',
-            style: const TextStyle(
-              color: Color(0xFF636E72),
-              fontFamily: 'monospace',
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// Large status display card
   Widget _buildStatusCard() {
     return Container(
@@ -595,12 +585,19 @@ class _DetectionScreenState extends State<DetectionScreen>
           ),
           const SizedBox(height: 6),
 
-          // Eye state text
+          // Eye state + yawn combined label
           Text(
-            'Eye State: ${_result.state}',
+            _result.isYawning
+                ? 'Eye: ${_result.state}  •  😮 Yawning!'
+                : 'Eye State: ${_result.state}',
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade600,
+              color: _result.isYawning
+                  ? const Color(0xFFE17055)
+                  : Colors.grey.shade600,
+              fontWeight: _result.isYawning
+                  ? FontWeight.w600
+                  : FontWeight.normal,
             ),
           ),
           const SizedBox(height: 14),
@@ -631,7 +628,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 
-  /// 2x2 grid of metric cards
+  /// 2x3 grid of metric cards (EAR, Eye, MAR, Yawn, Blinks, Frames)
   Widget _buildMetricsGrid() {
     return GridView.count(
       crossAxisCount: 2,
@@ -658,15 +655,31 @@ class _DetectionScreenState extends State<DetectionScreen>
               : const Color(0xFF00B894),
         ),
         _buildMetricCard(
+          title: 'MAR Value',
+          value: _result.marDisplay,
+          icon: Icons.sentiment_very_dissatisfied_rounded,
+          color: const Color(0xFF0984E3),
+        ),
+        _buildMetricCard(
+          title: 'Yawn',
+          value: _result.yawnDisplay,
+          icon: _result.isYawning
+              ? Icons.warning_amber_rounded
+              : Icons.check_circle_outline_rounded,
+          color: _result.isYawning
+              ? const Color(0xFFE17055)
+              : const Color(0xFF00B894),
+        ),
+        _buildMetricCard(
           title: 'Blink Count',
           value: '${_result.blinkCount}',
           icon: Icons.auto_awesome_rounded,
           color: const Color(0xFFFD79A8),
         ),
         _buildMetricCard(
-          title: 'Closed Frames',
-          value: '${_result.closedEyeFrames}',
-          icon: Icons.timer_rounded,
+          title: 'Yawn Count',
+          value: '${_result.yawnCount}',
+          icon: Icons.air_rounded,
           color: const Color(0xFFE17055),
         ),
       ],

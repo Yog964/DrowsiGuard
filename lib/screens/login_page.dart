@@ -2,15 +2,13 @@
 /// LOGIN PAGE
 /// ============================================================
 /// This screen handles user authentication with email & password.
-/// Currently uses mock validation; ready for MongoDB integration.
-///
-/// Future Scope:
-///   - Connect to MongoDB/Firebase for real authentication
-///   - Add "Forgot Password" functionality
-///   - Add biometric login support
+/// Supports both Login and Registration via a toggle.
+/// Connected to MongoDB via FastAPI backend.
 /// ============================================================
 
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../services/app_settings.dart';
 import 'home_page.dart';
 
 class LoginPage extends StatefulWidget {
@@ -25,15 +23,27 @@ class _LoginPageState extends State<LoginPage>
   // Controllers to capture text field input
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
 
   // Form key for validation
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  // API Service
+  final ApiService _api = ApiService();
+  final AppSettings _settings = AppSettings();
+
+  // Server IP Controller
+  late final TextEditingController _serverIpController;
 
   // Toggle password visibility
   bool _obscurePassword = true;
 
   // Loading state for login button
   bool _isLoading = false;
+
+  // Toggle between Login and Register mode
+  bool _isRegisterMode = false;
 
   // Animation controller for fade-in effect
   late AnimationController _animController;
@@ -42,6 +52,7 @@ class _LoginPageState extends State<LoginPage>
   @override
   void initState() {
     super.initState();
+    _serverIpController = TextEditingController(text: _settings.serverIp);
     // Setup fade-in animation
     _animController = AnimationController(
       vsync: this,
@@ -59,26 +70,25 @@ class _LoginPageState extends State<LoginPage>
     // Clean up controllers to prevent memory leaks
     _emailController.dispose();
     _passwordController.dispose();
+    _nameController.dispose();
+    _phoneController.dispose();
+    _serverIpController.dispose();
     _animController.dispose();
     super.dispose();
   }
 
-  /// Handles login validation and navigation.
-  /// Currently uses mock credentials. Replace with API call later.
+  /// Handles login with the backend API.
   void _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
-    // Simulate network delay (remove when connecting to backend)
-    await Future.delayed(const Duration(seconds: 1));
+    try {
+      await _api.login(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
 
-    // ---- MOCK AUTHENTICATION ----
-    // Replace this block with actual MongoDB/API authentication
-    final String email = _emailController.text.trim();
-    final String password = _passwordController.text.trim();
-
-    if (email == 'test@email.com' && password == '123456') {
       // Navigate to Home Page on successful login
       if (mounted) {
         Navigator.pushReplacement(
@@ -86,13 +96,12 @@ class _LoginPageState extends State<LoginPage>
           MaterialPageRoute(builder: (_) => const HomePage()),
         );
       }
-    } else {
-      // Show error message for invalid credentials
+    } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Invalid email or password'),
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
             backgroundColor: Colors.red.shade400,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
@@ -102,6 +111,52 @@ class _LoginPageState extends State<LoginPage>
         );
       }
     }
+  }
+
+  /// Handles registration with the backend API.
+  void _handleRegister() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      await _api.register(
+        name: _nameController.text.trim(),
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        phone: _phoneController.text.trim(),
+      );
+
+      // Navigate to Home Page on successful registration
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomePage()),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red.shade400,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Toggle between login and register modes
+  void _toggleMode() {
+    setState(() {
+      _isRegisterMode = !_isRegisterMode;
+      _isLoading = false;
+    });
   }
 
   @override
@@ -171,7 +226,7 @@ class _LoginPageState extends State<LoginPage>
                     ),
                     const SizedBox(height: 40),
 
-                    // ---- Login Form Card ----
+                    // ---- Login/Register Form Card ----
                     Container(
                       padding: const EdgeInsets.all(24),
                       decoration: BoxDecoration(
@@ -185,6 +240,54 @@ class _LoginPageState extends State<LoginPage>
                         key: _formKey,
                         child: Column(
                           children: [
+                            // ── Mode Title ──
+                            Text(
+                              _isRegisterMode ? 'Create Account' : 'Welcome Back',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+
+                            // ---- Server IP Field ----
+                            TextFormField(
+                              controller: _serverIpController,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: _inputDecoration(
+                                label: 'Server IP Address',
+                                icon: Icons.wifi,
+                              ),
+                              validator: (value) {
+                                if (value == null || value.isEmpty) {
+                                  return 'Please enter Server IP';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 14),
+
+                            // ── Name Field (Register only) ──
+                            if (_isRegisterMode) ...[
+                              TextFormField(
+                                controller: _nameController,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: _inputDecoration(
+                                  label: 'Full Name',
+                                  icon: Icons.person_outlined,
+                                ),
+                                validator: (value) {
+                                  if (_isRegisterMode &&
+                                      (value == null || value.isEmpty)) {
+                                    return 'Please enter your name';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+
                             // ---- Email Field ----
                             TextFormField(
                               controller: _emailController,
@@ -204,7 +307,7 @@ class _LoginPageState extends State<LoginPage>
                                 return null;
                               },
                             ),
-                            const SizedBox(height: 18),
+                            const SizedBox(height: 14),
 
                             // ---- Password Field ----
                             TextFormField(
@@ -238,39 +341,33 @@ class _LoginPageState extends State<LoginPage>
                                 return null;
                               },
                             ),
-                            const SizedBox(height: 10),
 
-                            // ---- Forgot Password Link ----
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton(
-                                onPressed: () {
-                                  // TODO: Implement forgot password
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Forgot password - Coming soon!',
-                                      ),
-                                    ),
-                                  );
-                                },
-                                child: Text(
-                                  'Forgot Password?',
-                                  style: TextStyle(
-                                    color: Colors.tealAccent.withOpacity(0.8),
-                                    fontSize: 13,
-                                  ),
+                            // ── Phone Field (Register only) ──
+                            if (_isRegisterMode) ...[
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                controller: _phoneController,
+                                keyboardType: TextInputType.phone,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: _inputDecoration(
+                                  label: 'Phone (optional)',
+                                  icon: Icons.phone_outlined,
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 12),
+                            ],
 
-                            // ---- Login Button ----
+                            const SizedBox(height: 24),
+
+                            // ---- Login/Register Button ----
                             SizedBox(
                               width: double.infinity,
                               height: 52,
                               child: ElevatedButton(
-                                onPressed: _isLoading ? null : _handleLogin,
+                                onPressed: _isLoading
+                                    ? null
+                                    : (_isRegisterMode
+                                        ? _handleRegister
+                                        : _handleLogin),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFF00BFA6),
                                   foregroundColor: Colors.white,
@@ -288,9 +385,9 @@ class _LoginPageState extends State<LoginPage>
                                           color: Colors.white,
                                         ),
                                       )
-                                    : const Text(
-                                        'LOGIN',
-                                        style: TextStyle(
+                                    : Text(
+                                        _isRegisterMode ? 'SIGN UP' : 'LOGIN',
+                                        style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.bold,
                                           letterSpacing: 1.5,
@@ -304,37 +401,31 @@ class _LoginPageState extends State<LoginPage>
                     ),
                     const SizedBox(height: 24),
 
-                    // ---- Mock Credentials Hint ----
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.tealAccent.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: Colors.tealAccent.withOpacity(0.2),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: Colors.tealAccent.withOpacity(0.7),
-                            size: 18,
+                    // ---- Toggle Login/Register ----
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _isRegisterMode
+                              ? 'Already have an account?'
+                              : "Don't have an account?",
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.6),
+                            fontSize: 13,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Demo: test@email.com / 123456',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.6),
-                              fontSize: 12,
+                        ),
+                        TextButton(
+                          onPressed: _toggleMode,
+                          child: Text(
+                            _isRegisterMode ? 'Login' : 'Sign Up',
+                            style: const TextStyle(
+                              color: Colors.tealAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

@@ -38,6 +38,11 @@ enum ConnectionStatus {
 }
 
 class WebSocketService {
+  // ---- Singleton Pattern ----
+  static final WebSocketService _instance = WebSocketService._internal();
+  factory WebSocketService() => _instance;
+  WebSocketService._internal();
+
   /// The active WebSocket channel (null when disconnected)
   WebSocketChannel? _channel;
 
@@ -52,6 +57,11 @@ class WebSocketService {
 
   /// Callback for connection status changes
   Function(ConnectionStatus)? _onStatusChange;
+
+  /// Clear the status change callback (call this when disposing screens)
+  void clearStatusCallback() {
+    _onStatusChange = null;
+  }
 
   /// Connect to the backend WebSocket server.
   ///
@@ -71,32 +81,39 @@ class WebSocketService {
 
     try {
       // Create the WebSocket channel
-      _channel = WebSocketChannel.connect(Uri.parse(serverUrl));
-
-      // Mark as connected once the channel is created
-      _updateStatus(ConnectionStatus.connected);
+      final uri = Uri.parse(serverUrl);
+      _channel = WebSocketChannel.connect(uri);
 
       // Listen for incoming messages from the backend
       _channel!.stream.listen(
         (message) {
+          // Mark as connected on first message or upon successful stream open
+          if (_status != ConnectionStatus.connected) {
+            _updateStatus(ConnectionStatus.connected);
+          }
           // Parse the JSON response from backend
           _handleMessage(message, onResult);
         },
         onError: (error) {
-          // Handle WebSocket errors
-          debugPrint('WebSocket error: $error');
+          // Handle WebSocket errors (e.g. timeout, connection refused)
+          debugPrint('WebSocket stream error: $error');
           _updateStatus(ConnectionStatus.error);
         },
         onDone: () {
           // Handle connection closed by server
-          debugPrint('WebSocket connection closed');
+          debugPrint('WebSocket connection closed by server');
           _updateStatus(ConnectionStatus.disconnected);
         },
         cancelOnError: false,
       );
+      
+      // Update status to connected as we assume successful initiation.
+      // The stream's onError will trigger if the connection actually fails.
+      _updateStatus(ConnectionStatus.connected);
+
     } catch (e) {
-      // Handle connection failure
-      debugPrint('WebSocket connection failed: $e');
+      // Handle immediate connection failure
+      debugPrint('WebSocket connection failed during setup: $e');
       _updateStatus(ConnectionStatus.error);
     }
   }

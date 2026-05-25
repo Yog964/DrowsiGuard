@@ -64,11 +64,11 @@ class CameraService {
       orElse: () => _cameras.first, // Fallback to first camera
     );
 
-    // Create the controller with medium resolution for balance
-    // between quality and performance
+    // Create the controller with low resolution for balance
+    // between quality and performance, and to keep WebSocket payload small
     _controller = CameraController(
       frontCamera,
-      ResolutionPreset.medium,
+      ResolutionPreset.low,
       enableAudio: false, // No audio needed for drowsiness detection
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
@@ -109,6 +109,8 @@ class CameraService {
     _frameTimer = null;
   }
 
+  bool _isCapturing = false;
+
   /// Capture a single frame, convert to base64, and pass to callback.
   ///
   /// Pipeline:
@@ -118,8 +120,10 @@ class CameraService {
   ) async {
     if (!_isInitialized || _controller == null) return;
     if (!_controller!.value.isInitialized) return;
+    if (_isCapturing) return;
 
     try {
+      _isCapturing = true;
       // Capture the current frame as a JPEG image
       final XFile imageFile = await _controller!.takePicture();
 
@@ -134,6 +138,8 @@ class CameraService {
     } catch (e) {
       // Silently handle capture errors (camera might be busy)
       debugPrint('Frame capture error: $e');
+    } finally {
+      _isCapturing = false;
     }
   }
 

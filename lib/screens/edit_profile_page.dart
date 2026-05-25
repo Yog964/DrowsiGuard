@@ -2,20 +2,13 @@
 /// EDIT PROFILE PAGE
 /// ============================================================
 /// Allows the user to modify their profile information.
+/// Saves changes to MongoDB via the backend API.
 /// Returns the updated UserModel to the ProfilePage on save.
-///
-/// Features:
-///   - Pre-filled form with current user data
-///   - Form validation for all fields
-///   - Returns updated UserModel via Navigator.pop()
-///
-/// Future Scope:
-///   - Save changes to MongoDB
-///   - Upload profile picture
 /// ============================================================
 
 import 'package:flutter/material.dart';
 import '../models/user_model.dart';
+import '../services/api_service.dart';
 
 class EditProfilePage extends StatefulWidget {
   // Receives current user data to pre-fill the form
@@ -30,6 +23,9 @@ class EditProfilePage extends StatefulWidget {
 class _EditProfilePageState extends State<EditProfilePage> {
   // Form key for validation
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  // API Service
+  final ApiService _api = ApiService();
 
   // Text controllers for each editable field
   late TextEditingController _nameController;
@@ -64,39 +60,52 @@ class _EditProfilePageState extends State<EditProfilePage> {
     super.dispose();
   }
 
-  /// Validates form and returns updated UserModel to previous screen.
+  /// Validates form and saves profile to backend via API.
   void _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSaving = true);
 
-    // Simulate saving delay (replace with API call)
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    // Create updated user model using copyWith
-    final updatedUser = widget.user.copyWith(
-      name: _nameController.text.trim(),
-      email: _emailController.text.trim(),
-      phone: _phoneController.text.trim(),
-      vehicleNumber: _vehicleController.text.trim(),
-      emergencyContact: _emergencyController.text.trim(),
-    );
-
-    if (mounted) {
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Profile updated successfully!'),
-          backgroundColor: Colors.green.shade400,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
+    try {
+      final updatedUser = await _api.updateProfile(
+        userId: widget.user.id,
+        name: _nameController.text.trim(),
+        email: _emailController.text.trim(),
+        phone: _phoneController.text.trim(),
+        vehicleNumber: _vehicleController.text.trim(),
+        emergencyContact: _emergencyController.text.trim(),
       );
 
-      // Return updated user to ProfilePage
-      Navigator.pop(context, updatedUser);
+      if (mounted) {
+        // Show success message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Profile updated successfully!'),
+            backgroundColor: Colors.green.shade400,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+
+        // Return updated user to ProfilePage
+        Navigator.pop(context, updatedUser);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: ${e.toString().replaceFirst("Exception: ", "")}'),
+            backgroundColor: Colors.red.shade400,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
     }
   }
 

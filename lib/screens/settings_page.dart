@@ -33,7 +33,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F6F9),
       appBar: AppBar(
         title: const Text('Settings'),
         centerTitle: true,
@@ -57,7 +56,10 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: 'Play alarm sound when drowsiness detected',
             value: _settings.soundAlerts,
             color: const Color(0xFF6C5CE7),
-            onChanged: (val) => setState(() => _settings.soundAlerts = val),
+            onChanged: (val) {
+              setState(() => _settings.soundAlerts = val);
+              _settings.saveSettings();
+            },
           ),
 
           // Vibration Alerts Toggle
@@ -67,8 +69,12 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: 'Vibrate phone when drowsiness detected',
             value: _settings.vibrationAlerts,
             color: const Color(0xFFFD79A8),
-            onChanged: (val) => setState(() => _settings.vibrationAlerts = val),
+            onChanged: (val) {
+              setState(() => _settings.vibrationAlerts = val);
+              _settings.saveSettings();
+            },
           ),
+
 
           const SizedBox(height: 20),
 
@@ -89,11 +95,14 @@ class _SettingsPageState extends State<SettingsPage> {
           // Auto-start Toggle
           _buildSwitchTile(
             icon: Icons.play_circle_outline_rounded,
-            title: 'Auto-start Detection',
+            title: 'Auto Start Detection',
             subtitle: 'Begin monitoring when app opens',
             value: _settings.autoStart,
             color: const Color(0xFF0984E3),
-            onChanged: (val) => setState(() => _settings.autoStart = val),
+            onChanged: (val) {
+              setState(() => _settings.autoStart = val);
+              _settings.saveSettings();
+            },
           ),
 
           const SizedBox(height: 20),
@@ -113,12 +122,7 @@ class _SettingsPageState extends State<SettingsPage> {
             color: const Color(0xFF2D3436),
             onChanged: (val) {
               setState(() => _settings.darkMode = val);
-              // TODO: Implement actual theme switching
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Dark mode coming soon!'),
-                ),
-              );
+              _settings.saveSettings();
             },
           ),
 
@@ -159,6 +163,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   _settings.autoStart = false;
                   _settings.sensitivity = 'Medium';
                 });
+                _settings.saveSettings();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: const Text('Settings reset to defaults'),
@@ -312,7 +317,10 @@ class _SettingsPageState extends State<SettingsPage> {
               .map((s) => DropdownMenuItem(value: s, child: Text(s)))
               .toList(),
           onChanged: (val) {
-            if (val != null) setState(() => _settings.sensitivity = val);
+            if (val != null) {
+              setState(() => _settings.sensitivity = val);
+              _settings.saveSettings();
+            }
           },
         ),
       ),
